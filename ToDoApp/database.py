@@ -4,13 +4,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 
-SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./todosapp.db")
-# Some hosts give postgres://, but SQLAlchemy only accepts postgresql://
-SQLALCHEMY_DATABASE_URL = SQLALCHEMY_DATABASE_URL.replace("postgres://", "postgresql://", 1)
+SQLALCHEMY_DATABASE_URL = "sqlite:///./todosapp.db"
 
-# check_same_thread only exists in SQLite; Postgres refuses to connect if it's passed
-connect_args = {'check_same_thread': False} if SQLALCHEMY_DATABASE_URL.startswith("sqlite") else {}
-engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args=connect_args)
+engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={'check_same_thread': False})
 
 SessionLocal = sessionmaker(autocommit = False, autoflush = False, bind=engine)
 
