@@ -1,0 +1,12 @@
+# Virtual environment
+.fastapi/
+
+# Python cache
+__pycache__/
+
+# Local database and secrets
+*.db
+.env
+
+# macOS
+.DS_Store

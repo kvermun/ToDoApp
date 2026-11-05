@@ -1,0 +1,82 @@
+name: Deploy to AWS Lightsail
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # also lets you start a deploy by hand from the Actions tab
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: eu-west-2   # London
+  SERVICE_NAME: todo-api  # the Lightsail container service
+  CONTAINER_NAME: app
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install the Lightsail plugin for the AWS CLI
+        run: |
+          sudo curl -fsSL "https://s3.us-west-2.amazonaws.com/lightsailctl/latest/linux-amd64/lightsailctl" -o /usr/local/bin/lightsailctl
+          sudo chmod +x /usr/local/bin/lightsailctl
+
+      - name: Build the image
+        run: docker build -t "$SERVICE_NAME" ./ToDoApp
+
+      - name: Push the image to Lightsail
+        run: |
+          aws lightsail push-container-image \
+            --service-name "$SERVICE_NAME" \
+            --label "$CONTAINER_NAME" \
+            --image "$SERVICE_NAME"
+
+      - name: Deploy the new image
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          IMAGE=$(aws lightsail get-container-images --service-name "$SERVICE_NAME" \
+            --query 'sort_by(containerImages, &createdAt)[-1].image' --output text)
+          echo "Deploying $IMAGE"
+
+          jq -n --arg name "$CONTAINER_NAME" --arg image "$IMAGE" --arg db "$DATABASE_URL" \
+            '{($name): {image: $image, environment: {DATABASE_URL: $db}, ports: {"8000": "HTTP"}}}' > containers.json
+          jq -n --arg name "$CONTAINER_NAME" \
+            '{containerName: $name, containerPort: 8000, healthCheck: {path: "/"}}' > endpoint.json
+
+          VERSION=$(aws lightsail create-container-service-deployment \
+            --service-name "$SERVICE_NAME" \
+            --containers file://containers.json \
+            --public-endpoint file://endpoint.json \
+            --query 'containerService.nextDeployment.version' --output text)
+          echo "Started deployment version $VERSION"
+
+          # Wait until the new version is live, or Lightsail gives up on it
+          for i in $(seq 1 60); do
+            sleep 10
+            read -r CURRENT NEXT <<< "$(aws lightsail get-container-services --service-name "$SERVICE_NAME" \
+              --query 'containerServices[0].[currentDeployment.version, nextDeployment.version]' --output text)"
+            if [ "$CURRENT" = "$VERSION" ]; then
+              echo "Deployment $VERSION is live"
+              exit 0
+            fi
+            if [ "$NEXT" = "None" ]; then
+              echo "Deployment $VERSION failed. Check the container logs in the Lightsail console."
+              exit 1
+            fi
+          done
+          echo "Timed out waiting for deployment $VERSION"
+          exit 1
